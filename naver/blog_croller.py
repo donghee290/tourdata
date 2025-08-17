@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import json
 import requests
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse, parse_qs
@@ -12,6 +13,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.action_chains import ActionChains
 
 
 REQ_HEADERS = {
@@ -47,7 +49,6 @@ def _selenium_get_dom(url: str, iframe_url: Optional[str] = None) -> webdriver.C
     opts.page_load_strategy = "eager"
     opts.add_argument(f"user-agent={REQ_HEADERS['User-Agent']}")
 
-    devnull = open(os.devnull, "w")
     service = Service(ChromeDriverManager().install(), log_output=os.devnull)
     driver = webdriver.Chrome(service=service, options=opts)
     driver.get(iframe_url or url)
@@ -74,6 +75,72 @@ def _switch_into_iframe_if_present(driver: webdriver.Chrome) -> None:
     except Exception:
         pass
 
+def _expand_tag_panel(driver: webdriver.Chrome) -> None:
+    """
+    일부 스킨은 '태그' 섹션이 접혀 있음 → 더보기/토글 클릭으로 펼침
+    """
+    candidates = [
+        ".post_tag .btn_more",
+        ".tag_list_area .btn_more",
+        "button[aria-controls*='tag']",
+        "a#tag_toggle",
+        ".se_tag_area .btn_more",
+        ".post_tag .btn_open",
+        ".tag_area .btn_more",
+    ]
+    try:
+        driver.execute_script("window.scrollBy(0, 400);")
+        for css in candidates:
+            try:
+                btns = driver.find_elements(By.CSS_SELECTOR, css)
+                if not btns:
+                    continue
+                for b in btns:
+                    if not b.is_displayed():
+                        continue
+                    try:
+                        ActionChains(driver).move_to_element(b).pause(0.1).click(b).perform()
+                    except Exception:
+                        try:
+                            driver.execute_script("arguments[0].click();", b)
+                        except Exception:
+                            continue
+                    time.sleep(0.4)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+def _collect_tags_via_regex(html_or_soup) -> List[str]:
+    """
+    마지막 보루: HTML 전체에서 태그 후보를 정규식으로 긁음
+    - /TagSearch.naver?...tag=키워드
+    - "tagName":"키워드"
+    - meta keywords
+    """
+    text = html_or_soup if isinstance(html_or_soup, str) else str(html_or_soup)
+    cand: List[str] = []
+
+    for m in re.findall(r'[?&](?:tag|keyword|query)=([^&#"]+)', text, flags=re.I):
+        cand.append(m)
+
+    for m in re.findall(r'"tagName"\s*:\s*"([^"]+)"', text):
+        cand.append(m)
+
+    for m in re.findall(
+        r'<meta[^>]+name=["\']keywords["\'][^>]+content=["\']([^"\']+)["\']',
+        text, flags=re.I
+    ):
+        parts = re.split(r'[,\s/|]+', m)
+        cand.extend([p for p in parts if p])
+
+    try:
+        from urllib.parse import unquote
+        cand = [unquote(x) for x in cand]
+    except Exception:
+        pass
+
+    return _clean_tags(cand)
 
 def _first_text(driver: webdriver.Chrome, selectors: List[str]) -> str:
     for css in selectors:
@@ -210,6 +277,157 @@ def _collect_tags_from_dom(driver: webdriver.Chrome) -> List[str]:
 
     return _clean_tags(expanded)
 
+def _extract_ids_from_urls(url: str, iframe_url: Optional[str]) -> Optional[Dict[str, str]]:
+    """
+    주어진 URL/iframe_url 쿼리에서 blogId, logNo를 추출
+    """
+    def pick(qs):
+        blog_id = qs.get("blogId", [None])[0]
+        log_no  = qs.get("logNo", [None])[0]
+        if blog_id and log_no:
+            return {"blogId": blog_id, "logNo": log_no}
+        return None
+
+    # 1) 원본 URL에서 시도
+    try:
+        qs = parse_qs(urlparse(url).query)
+        r = pick(qs)
+        if r:
+            return r
+    except Exception:
+        pass
+
+    # 2) iframe_url에서 시도
+    if iframe_url:
+        try:
+            qs = parse_qs(urlparse(iframe_url).query)
+            r = pick(qs)
+            if r:
+                return r
+        except Exception:
+            pass
+
+    return None
+
+def _get_tags_via_mobile_json(blog_id: str, log_no: str) -> List[str]:
+    """
+    m.blog.naver.com/PostView.json 호출로 태그 추출
+    스키마가 종종 바뀌므로 여러 경로를 방어적으로 조회
+    """
+    api = f"https://m.blog.naver.com/PostView.json?blogId={blog_id}&logNo={log_no}"
+    try:
+        res = requests.get(
+            api,
+            headers={
+                **REQ_HEADERS,
+                "Referer": f"https://m.blog.naver.com/{blog_id}/{log_no}",
+                "Accept": "application/json, text/plain, */*",
+            },
+            timeout=15,
+        )
+        res.raise_for_status()
+        data = res.json()
+    except Exception:
+        return []
+
+    # 가능한 경로 후보들
+    candidates = [
+        ["result", "post", "tagList"],   # 가장 흔함: [{tagName: "..."}]
+        ["post", "tagList"],
+        ["result", "tagList"],
+    ]
+
+    tag_objs: List[Dict[str, Any]] = []
+    for path in candidates:
+        cur: Any = data
+        ok = True
+        for k in path:
+            if isinstance(cur, dict) and (k in cur):
+                cur = cur[k]
+            else:
+                ok = False
+                break
+        if ok and isinstance(cur, list):
+            tag_objs = cur
+            break
+
+    tags: List[str] = []
+    for obj in tag_objs:
+        if not isinstance(obj, dict):
+            continue
+        for key in ("tagName", "name", "keyword", "tag"):
+            v = obj.get(key)
+            if v and isinstance(v, str) and v.strip():
+                tags.append(v.strip())
+
+    return _clean_tags(tags)
+
+def _extract_ids_from_urls(url: str, iframe_url: Optional[str]) -> Optional[Dict[str, str]]:
+    """주어진 URL/iframe_url 쿼리에서 blogId, logNo 추출"""
+    def pick(qs):
+        blog_id = qs.get("blogId", [None])[0]
+        log_no  = qs.get("logNo", [None])[0]
+        if blog_id and log_no:
+            return {"blogId": blog_id, "logNo": log_no}
+        return None
+
+    try:
+        qs = parse_qs(urlparse(url).query)
+        r = pick(qs)
+        if r:
+            return r
+    except Exception:
+        pass
+
+    if iframe_url:
+        try:
+            qs = parse_qs(urlparse(iframe_url).query)
+            r = pick(qs)
+            if r:
+                return r
+        except Exception:
+            pass
+
+    return None
+
+def _get_tags_from_mobile_html(blog_id: str, log_no: str) -> List[str]:
+    url = f"https://m.blog.naver.com/{blog_id}/{log_no}"
+    try:
+        soup = _requests_get(url)
+    except Exception:
+        return []
+
+    sels = [
+        ".post_tag a",
+        ".post_tag_inner a",
+        ".tag_list_area a",
+        ".tag_area a",
+        "a.link_tag",
+        "a[href*='TagSearch.naver']",
+    ]
+    raw: List[str] = []
+    for sel in sels:
+        for a in soup.select(sel):
+            txt = (a.get_text(strip=True) or "").strip()
+            if txt:
+                raw.append(txt)
+            title = a.get("title")
+            if title and title.strip():
+                raw.append(title.strip())
+            href = a.get("href")
+            if href:
+                try:
+                    q = parse_qs(urlparse(href).query)
+                    for key in ("tag", "keyword", "query"):
+                        if key in q and q[key]:
+                            raw.extend([v for v in q[key] if v])
+                except Exception:
+                    pass
+
+    parsed = _clean_tags(raw)
+    if not parsed:
+        parsed = _collect_tags_via_regex(soup)
+    return parsed
 
 def crawl_blog_post(url: str) -> Optional[Dict[str, Any]]:
     """
@@ -265,10 +483,11 @@ def crawl_blog_post(url: str) -> Optional[Dict[str, Any]]:
                     if t.get_text(strip=True)
                 ]
             tags = _clean_tags(tags)
+            if not tags:
+                tags = _collect_tags_via_regex(soup2)
         except Exception:
             pass
 
-    # 3) 날짜/태그/본문 중 하나라도 비면 Selenium으로 보강
     if (not date_text) or (not tags) or (not content):
         driver = None
         try:
@@ -322,7 +541,16 @@ def crawl_blog_post(url: str) -> Optional[Dict[str, Any]]:
 
             # 태그 보강
             if not tags:
-                tags = _collect_tags_from_dom(driver)
+                _expand_tag_panel(driver)
+                dom_tags = _collect_tags_from_dom(driver)
+                if dom_tags:
+                    tags = dom_tags
+
+            if not tags:
+                try:
+                    tags = _collect_tags_via_regex(driver.page_source)
+                except Exception:
+                    pass
 
         finally:
             if driver:
