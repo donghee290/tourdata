@@ -2,9 +2,13 @@ import os
 import re
 import time
 import requests
+import json
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse, parse_qs, unquote
 from bs4 import BeautifulSoup
+import math
+import unicodedata
+from collections import Counter, defaultdict
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -118,6 +122,21 @@ def _strip_css_js(html_or_soup) -> str:
     for el in soup.find_all(attrs={"style": True}):
         del el["style"]
     return str(soup)
+
+def _html_to_text(html: str) -> str:
+    """HTML → 줄바꿈 없는 단일 라인 텍스트로 변환"""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html or "", "html.parser")
+
+    for tag in soup(["script", "style", "noscript", "template"]):
+        tag.decompose()
+
+    text = soup.get_text(separator=" ", strip=True)
+
+    text = re.sub(r"[\u200B-\u200D\uFEFF\xa0]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
 
 def _clean_tags(raw: List[str]) -> List[str]:
     drop_words = {
@@ -462,6 +481,112 @@ def _collect_tags_with_js(driver: webdriver.Chrome) -> List[str]:
     except Exception:
         return []
 
+def _ko_tokenize(text: str) -> list[str]:
+    """한국어/영문/숫자 토큰화(형태소기반 아님). 공백·특수문자 기준 단어 단위.
+       필요하면 MECAB 등으로 교체 가능."""
+    if not text:
+        return []
+    # 정규화 + 제로폭 제거
+    text = unicodedata.normalize("NFKC", text)
+    text = re.sub(r"[\u200B-\u200D\uFEFF]", "", text)
+    # 해시 제거(#구미 -> 구미). 언더스코어/하이픈은 단어 내부 허용
+    text = re.sub(r"#", " ", text)
+    # 토큰: 한글/영문/숫자와 내부 [-_] 허용
+    return re.findall(r"[0-9A-Za-z가-힣]+(?:[-_][0-9A-Za-z가-힣]+)*", text)
+
+class _BM25:
+    def __init__(self, docs: list[list[str]], k1: float = 1.5, b: float = 0.75):
+        self.k1 = k1
+        self.b = b
+        self.docs = docs
+        self.N = len(docs)
+        self.avgdl = sum(len(d) for d in docs) / self.N if self.N else 0.0
+        # df
+        df = Counter()
+        for d in docs:
+            df.update(set(d))
+        self.idf = {t: math.log((self.N - df[t] + 0.5) / (df[t] + 0.5) + 1) for t in df}
+
+    def score(self, q: list[str], d: list[str]) -> float:
+        if not q or not d:
+            return 0.0
+        tf = Counter(d)
+        score = 0.0
+        dl = len(d)
+        for term in q:
+            if term not in self.idf:
+                continue
+            idf = self.idf[term]
+            num = tf[term] * (self.k1 + 1)
+            den = tf[term] + self.k1 * (1 - self.b + self.b * (dl / (self.avgdl or 1)))
+            score += idf * (num / (den or 1))
+        return score
+
+def rank_by_relevance(posts: list[dict], query: str, top_k: int = 5) -> list[dict]:
+    titles = [_ko_tokenize((p.get("title") or "")) for p in posts]
+    tags_joined = [" ".join(p.get("tags") or []) for p in posts]
+    tags_tokens = [_ko_tokenize(t) for t in tags_joined]
+    bodies = [_ko_tokenize((p.get("content") or "")[:4000]) for p in posts]
+
+    bm_title = _BM25(titles) if posts else None
+    bm_tags  = _BM25(tags_tokens) if posts else None
+    bm_body  = _BM25(bodies) if posts else None
+
+    q_tokens = _ko_tokenize(query)
+    exact_q = set(q_tokens)
+
+    ranked = []
+    for i, p in enumerate(posts):
+        s_title = bm_title.score(q_tokens, titles[i]) if bm_title else 0.0
+        s_tags  = bm_tags.score(q_tokens,  tags_tokens[i]) if bm_tags else 0.0
+        s_body  = bm_body.score(q_tokens,  bodies[i]) if bm_body else 0.0
+
+        score = 3.0 * s_title + 2.0 * s_tags + 1.0 * s_body
+
+        if exact_q & set(titles[i]):
+            score += 1.5
+        if exact_q & set(tags_tokens[i]):
+            score += 1.0
+
+        ranked.append((score, p))
+
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    return [p for _, p in ranked[:top_k]]
+
+def _dedup_posts(posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """resolved_url 기준으로 중복 제거(먼저 나온 항목을 살림)"""
+    seen = set()
+    out = []
+    for p in posts:
+        url = (p.get("resolved_url") or p.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        out.append(p)
+    return out
+
+
+def fetch_and_rank(urls: List[str], query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    """
+    URL 리스트를 크롤링 → 유효 결과만 모음 → 중복 제거 → 관련도 랭킹으로 상위 N개 반환
+    """
+    posts: List[Dict[str, Any]] = []
+    for u in urls:
+        try:
+            rec = crawl_blog_post(u)
+            if not rec:
+                continue
+            if not rec.get("tags"): 
+                continue
+            posts.append(rec)
+        except Exception:
+            continue
+
+    if not posts:
+        return []
+
+    posts = _dedup_posts(posts)
+    return rank_by_relevance(posts, query=query, top_k=top_k)
 
 def crawl_blog_post(url: str) -> Optional[Dict[str, Any]]:
     """
@@ -496,7 +621,9 @@ def crawl_blog_post(url: str) -> Optional[Dict[str, Any]]:
                 title = title_el.get_text(strip=True)
             content_el = soup2.select_one(".se-main-container, #postViewArea")
             if content_el:
-                content = content_el.get_text(" ", strip=True)
+                content = _html_to_text(str(content_el))
+            else:
+                content = _html_to_text(str(soup2))
             date_el = soup2.select_one(
                 "span.se_publishDate, .date, .se_publish_date, .se_date, span.post_date, time"
             )
@@ -525,7 +652,20 @@ def crawl_blog_post(url: str) -> Optional[Dict[str, Any]]:
                     [".se-title-text", ".pcol1", ".se_title", "h3.se_textarea", "h3.se-module-title"],
                 )
             if not content:
-                content = _get_content_text(driver)
+                content_html = ""
+                for sel in [".se-main-container", "#postViewArea", ".se_component_wrap",
+                            ".se_textView", "#viewTypeSelector", "#ct"]:
+                    try:
+                        elems = driver.find_elements(By.CSS_SELECTOR, sel)
+                        if elems:
+                            content_html = elems[0].get_attribute("outerHTML") or ""
+                            if content_html:
+                                break
+                    except Exception:
+                        continue
+                if not content_html:
+                    content_html = driver.page_source
+                content = _html_to_text(content_html)
             if not date_text:
                 date_text = _first_text(
                     driver,
