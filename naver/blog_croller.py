@@ -106,25 +106,101 @@ def _normalize_text(s: str) -> str:
     s = s.replace("\xa0", " ")
     return s.strip()
 
+def _strip_css_js(html_or_soup) -> str:
+    """HTML에서 <style>, <script> 콘텐츠와 inline style 속성을 제거해 텍스트만 남김"""
+    from bs4 import BeautifulSoup
+    if isinstance(html_or_soup, BeautifulSoup):
+        soup = html_or_soup
+    else:
+        soup = BeautifulSoup(str(html_or_soup), "html.parser")
+    for tag in soup(["style", "script", "noscript", "template"]):
+        tag.decompose()
+    for el in soup.find_all(attrs={"style": True}):
+        del el["style"]
+    return str(soup)
 
 def _clean_tags(raw: List[str]) -> List[str]:
-    drop_words = {"태그", "tag", "해시태그"}
+    drop_words = {
+        "태그", "tag", "해시태그",
+        "ct", "postlist_block", "BtnCLose", "postListBody"
+    }
     out: List[str] = []
     seen = set()
+
+    def is_hex_color(s: str) -> bool:
+        if s.startswith("#"):
+            s2 = s[1:]
+            return bool(re.fullmatch(r"[A-Fa-f0-9]{3,8}", s2))
+        return bool(re.fullmatch(r"[A-Fa-f0-9]{3,8}", s))
+
+    def is_css_classish(s: str) -> bool:
+        if re.fullmatch(r"[A-Za-z0-9_-]+", s):
+            if "_" in s or "-" in s:
+                return True
+            if s.islower() and len(s) >= 4:
+                return True
+        return False
+
+    def is_short_ascii_noise(s: str) -> bool:
+        return bool(re.fullmatch(r"[A-Za-z0-9]{1,3}", s))
+
+    def is_ui_camel_noise(s: str) -> bool:
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9]+", s) and not re.search(r"[가-힣]", s):
+            return bool(re.search(r"(Close|Open|Wrap|Wrapper|Button|Btn|Body|Header|Footer)$", s, flags=re.I))
+        return False
+
+    def is_placeholder_or_markdown_noise(s: str) -> bool:
+        if "실제명소" in s or "대체" in s:
+            return True
+        if re.search(r"\](\s*)\(", s):
+            return True
+        if any(ch in s for ch in "[]()"): 
+            return True
+        if re.search(r"명소\d+이름", s):
+            return True
+        return False
+
     for t in raw:
         if not t:
             continue
         s = _normalize_text(t)
+
         s = re.sub(r"^[#\u0023\uFE0F\s]+", "", s)
-        s = s.strip("·•,|/#[]()")
+
+        if any(ch in s for ch in "{};:"):
+            continue
+
+        s = s.strip(" ,/|#[]()")
+
         if not s or s in drop_words:
             continue
+
         s = re.sub(r"\s{2,}", " ", s)
-        if len(s) < 2:
+
+        if is_hex_color(s):
             continue
+        if is_css_classish(s):
+            continue
+        if is_short_ascii_noise(s):
+            continue
+        if is_ui_camel_noise(s):
+            continue
+        if is_placeholder_or_markdown_noise(s):
+            continue
+        if re.search(r"(https?://|www\.)", s, flags=re.I):
+            continue
+        if re.search(r"\d{3,}", s):
+            continue
+        if len(s) > 30:
+            continue
+
+        if len(s) < 1:
+            continue
+
         if s not in seen:
             seen.add(s)
             out.append(s)
+
     return out
 
 
@@ -175,15 +251,11 @@ def _get_tags_from_mobile_html(blog_id: str, log_no: str) -> List[str]:
     
     def _from_meta_tags(soup: BeautifulSoup) -> List[str]:
         raw = []
-        for m in soup.find_all("meta", attrs={"property": ["og:article:tag", "article:tag"]}):
+        metas = soup.find_all("meta", attrs={"property": ["og:article:tag", "article:tag"]})
+        for m in metas:
             c = (m.get("content") or "").strip()
             if c:
                 raw.append(c)
-        # name="keywords" 백업 (콤마/슬래시/파이프 구분)
-        for m in soup.find_all("meta", attrs={"name": "keywords"}):
-            c = (m.get("content") or "").strip()
-            if c:
-                raw.extend([x.strip() for x in re.split(r"[,\|/]", c) if x.strip()])
         return _clean_tags(raw)
 
 
@@ -191,11 +263,16 @@ def _get_tags_from_mobile_html(blog_id: str, log_no: str) -> List[str]:
         sels = [
             ".post_tag a", ".post_tag_inner a", ".tag_list_area a", ".tag_area a",
             "a.link_tag", "a[href*='TagSearch.naver']", "dl.tag_area dd a",
-            'a[aria-label*="태그"]', ".se_hashtag a", ".se-hashtag a"
+            'a[aria-label*="태그"]', ".se_hashtag a", ".se-hashtag a",
+            ".se_viewArea .se_hashtag a", ".se_viewArea .se_hashtag a",
         ]
         raw: List[str] = []
         for sel in sels:
             for a in soup.select(sel):
+                cls = (a.get("class") or [])
+                role = (a.get("role") or "")
+                if any("btn" in str(c).lower() for c in cls) or "button" in role.lower():
+                    continue
                 txt = _normalize_text(a.get_text(" ", strip=True))
                 if txt:
                     raw.append(txt)
@@ -216,7 +293,6 @@ def _get_tags_from_mobile_html(blog_id: str, log_no: str) -> List[str]:
         return _clean_tags(raw)
 
     def _from_ldjson(soup: BeautifulSoup) -> List[str]:
-        # schema.org Article에 keywords가 문자열(콤마) 또는 배열로 올 수 있음
         try:
             for s in soup.find_all("script", type="application/ld+json"):
                 txt = s.string or s.text
@@ -244,66 +320,57 @@ def _get_tags_from_mobile_html(blog_id: str, log_no: str) -> List[str]:
         return []
 
     def _from_inline_json(soup: BeautifulSoup) -> List[str]:
-        # Next.js(__NEXT_DATA__) / Apollo / 임베디드 JSON에서 hashtags / tagList 등 긁기
         raw: List[str] = []
         try:
-            # 1) __NEXT_DATA__ 전체 JSON에서 배열형 키 추출
             for sc in soup.find_all("script"):
                 txt = sc.string or sc.text
                 if not txt or ("tag" not in txt and "hash" not in txt and "keyword" not in txt):
                     continue
-                # 배열 형태 ["태그1","태그2"] 를 통째로 꺼내기
-                for arr_txt in re.findall(r'(?:"(?:tags?|hash(?:Tags?|tags?)|keywords?)"\s*:\s*\[(.*?)\])', txt, flags=re.I|re.S):
-                    # 배열 내부 문자열 전부 추출
+                for arr_txt in re.findall(
+                    r'(?:"(?:tags?|tagList|hashTags?|hashtags?|keywords?|postTags?)"\s*:\s*\[(.*?)\])',
+                    txt, flags=re.I|re.S
+                ):
                     for m in re.findall(r'"([^"]+)"', arr_txt):
                         raw.append(m)
-                # 객체 배열 내부의 name 필드("tagName","hashtagName","name") 뽑기
-                for m in re.findall(r'"(?:tagName|hashTagName|hashtagName|name)"\s*:\s*"([^"]+)"', txt):
+                for m in re.findall(
+                    r'"(?:tagName|hashTagName|hashtagName)"\s*:\s*"([^"]+)"',
+                    txt
+                ):
                     raw.append(m)
-                # 쿼리스트링에 태그 담긴 경우도 잡기
                 for m in re.findall(r'[?&](?:tag|keyword|query)=([^&#"]+)', txt, flags=re.I):
                     raw.append(unquote(m))
         except Exception:
             pass
         return _clean_tags(raw)
 
-    # 1) 앵커로 먼저 시도
     tags = _from_anchor(soup)
     if tags:
         return tags
-    # 2) ld+json의 keywords
     tags = _from_ldjson(soup)
     if tags:
         return tags
-    # 3) __NEXT_DATA__/임베디드 JSON
     tags = _from_inline_json(soup)
     if tags:
         return tags
-    # 4) 마지막 보루: 전체 HTML 정규식
     return _collect_tags_via_regex(soup)
 
 
 def _collect_tags_via_regex(html_or_soup) -> List[str]:
-    text = html_or_soup if isinstance(html_or_soup, str) else str(html_or_soup)
+    cleaned_html = _strip_css_js(html_or_soup)
+    text = cleaned_html if isinstance(cleaned_html, str) else str(cleaned_html)
     cand: List[str] = []
 
-    # /TagSearch.naver?...tag=키워드
-    for m in re.findall(r'[?&](?:tag|keyword|query)=([^&#"]+)', text, flags=re.I):
-        cand.append(unquote(m))
-
-    # "tagName":"키워드" / "hashtagName":"키워드" / "name":"키워드"
-    for m in re.findall(r'"(?:tagName|hashTagName|hashtagName|name)"\s*:\s*"([^"]+)"', text):
+    for m in re.findall(r'(?<![0-9A-Za-z가-힣_~-])#([^\s#.,;:!?/\\<>\'"}]{1,})', text):
         cand.append(m)
 
-    # "tags":["A","B"] / "hashtags":["A","B"] / "keywords":["A","B"]
-    for arr_txt in re.findall(r'(?:"(?:tags?|hash(?:Tags?|tags?)|keywords?)"\s*:\s*\[(.*?)\])', text, flags=re.I|re.S):
-        for m in re.findall(r'"([^"]+)"', arr_txt):
-            cand.append(m)
+    for arr_txt in re.findall(
+        r'(?:"(?:tags?|tagList|hashTags?|hashtags?|keywords?|postTags?)"\s*:\s*\[(.*?)\])',
+        text, flags=re.I|re.S
+    ):
+        cand.extend(re.findall(r'"([^"]+)"', arr_txt))
 
-    # meta keywords
-    for m in re.findall(r'<meta[^>]+name=["\']keywords["\'][^>]+content=["\']([^"\']+)["\']', text, flags=re.I):
-        parts = re.split(r'[,\s/|]+', m)
-        cand.extend([p for p in parts if p])
+    for m in re.findall(r'"(?:tagName|hashTagName|hashtagName)"\s*:\s*"([^"]+)"', text):
+        cand.append(m)
 
     return _clean_tags(cand)
 
