@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
 from API_getter import get_blog_links
-from blog_croller import crawl_blog_post, rank_by_relevance
+from naver.blog_crawler import crawl_blog_post, rank_by_relevance
 from database_saver import save_posts_to_csv
 
 FETCH_MULTIPLIER = 3
