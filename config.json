@@ -1,0 +1,155 @@
+{
+  "apis": {
+    "광역관광통계": {
+      "url": "http://apis.data.go.kr/B551011/DataLabService/metcoRegnVisitrDDList",
+      "params": {
+        "numOfRows": 100,
+        "pageNo": 1,
+        "MobileOS": "WIN",
+        "MobileApp": "AppTest",
+        "_type": "json",
+        "startYmd": "20230430",
+        "endYmd": "20250430"
+      }
+    },
+    "지자체관광통계": {
+      "url": "http://apis.data.go.kr/B551011/DataLabService/locgoRegnVisitrDDList",
+      "params": {
+        "numOfRows": 100,
+        "pageNo": 1,
+        "MobileOS": "WIN",
+        "MobileApp": "AppTest",
+        "_type": "json",
+        "startYmd": "20230430",
+        "endYmd": "20250430"
+      }
+    },
+    "관광지정보": {
+      "url": "http://apis.data.go.kr/B551011/KorService2/areaBasedList2",
+      "params": {
+        "numOfRows": 100,
+        "pageNo": 1,
+        "MobileOS": "WIN",
+        "MobileApp": "AppTest",
+        "_type": "json",
+        "arrange": "A",
+        "contentTypeId": "",
+        "areaCode": "",
+        "sigunguCode": "",
+        "cat1": "",
+        "cat2": "",
+        "cat3": "",
+        "modifiedtime": "",
+        "serviceKey": "",
+        "lDongRegnCd": "",
+        "lDongSignguCd": "",
+        "lclsSystm1": "",
+        "lclsSystm2": "",
+        "lclsSystm3": ""
+      }
+    },
+    "지역코드조회": {
+      "url": "http://apis.data.go.kr/B551011/KorService2/areaCode2",
+      "params": {
+        "numOfRows": 100,
+        "pageNo": 1,
+        "MobileOS": "WIN",
+        "MobileApp": "AppTest",
+        "serviceKey": "",
+        "_type": "json",
+        "areaCode": ""
+      }
+    },
+    "서비스분류코드조회": {
+      "url": "http://apis.data.go.kr/B551011/KorService2/categoryCode2",
+      "params": {
+        "numOfRows": 100,
+        "pageNo": 1,
+        "MobileOS": "WIN",
+        "MobileApp": "AppTest",
+        "serviceKey": "",
+        "_type": "json",
+        "contentTypeId": "",
+        "cat1": "",
+        "cat2": "",
+        "cat3": ""
+      }
+    },
+    "법정동코드조회": {
+      "url": "http://apis.data.go.kr/B551011/KorService2/ldongCode2",
+      "params": {
+        "numOfRows": 100,
+        "pageNo": 1,
+        "MobileOS": "WEB",
+        "MobileApp": "AppTest",
+        "serviceKey": "",
+        "_type": "json",
+        "ldongAreaCd": "",
+        "lDongListYn": ""
+      }
+    },
+    "분류체계코드조회": {
+      "url": "http://apis.data.go.kr/B551011/KorService2/lclsSystmCode2",
+      "params": {
+        "numOfRows": 100,
+        "pageNo": 1,
+        "MobileOS": "WIN",
+        "MobileApp": "AppTest",
+        "serviceKey": "",
+        "_type": "json",
+        "lclsSystm1": "",
+        "lclsSystm2": "",
+        "lclsSystm3": "",
+        "lclsSystmListYn": "Y"
+      }
+    },
+    "festivalData":{
+      "url":"http://api.data.go.kr/openapi/tn_pubr_public_cltur_fstvl_api",
+      "pageNo": "",
+      "numOfRows": "",
+      "type": "",
+      "fstvlNm": "",
+      "opar": "",
+      "fstvlStartDate": "",
+      "fstvlEndDate": "",
+      "fstvlCo": "",
+      "mnnstNm": "",
+      "auspcInsttNm": "",
+      "suprtInsttNm": "",
+      "phoneNumber": "",
+      "homepageUrl": "",
+      "relateInfo": "",
+      "rdnmadr": "",
+      "lnmadr": "",
+      "latitude": "",
+      "longitude": "",
+      "referenceDate": "",
+      "instt_code": "",
+      "instt_nm": ""
+    }
+  },
+
+  "content_types": {
+    "관광지": 12,
+    "문화시설": 14,
+    "축제공연행사": 15,
+    "여행코스": 25,
+    "레포츠": 28,
+    "숙박": 32,
+    "쇼핑": 38,
+    "음식점": 39
+  },
+
+  "target_regions": [
+    "강원특별자치도 화천군",
+    "경상북도 영양군",
+    "경상북도 봉화군",
+    "경상북도 고령군",
+    "경상북도 의성군",
+    "경상북도 청도군",
+    "경상남도 고성군",
+    "부산 서구",
+    "부산 영도구",
+    "전라남도 고흥군"
+  ]
+}
