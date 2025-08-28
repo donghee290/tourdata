@@ -16,7 +16,6 @@ RESULTS_DIR = Path("results")
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_SCORES_PATH = RESULTS_DIR / "regional_branding_scores.csv"
-DEFAULT_GOV_SLOGANS = DATA_DIR / "gov_slogans.csv"
 
 OPENAI_MODEL = "gpt-4o-mini"
 TEMPERATURE = 0.3
@@ -142,6 +141,21 @@ def format_number(x: float, decimals: int = 3) -> str:
         return f"{float(x):.{decimals}f}"
     except:
         return str(x)
+    
+def make_region_slogan_gpt(client, region: str, row: pd.Series) -> str:
+    epi, u, c, g = row["EPI"], row["U"], row["C"], row["G"]
+    prompt = f"""
+당신은 지역 브랜딩 전문가입니다. 다음 지표를 바탕으로,
+해당 지역의 새로운 행정 슬로건을 1개 제안해 주세요.
+조건:
+- 한국어
+- 10자 이내
+- 긍정적이고 기억하기 쉬운 메시지
+
+- 지역명: {region}
+- 지표: EPI={epi:.2f}, U={u:.3f}, C={c:.3f}, G={g:.3f}
+"""
+    return gpt_chat(client, prompt)
 
 def make_region_comment_gpt(client, region: str, row: pd.Series, slogan: Optional[str], summary_hint: str) -> str:
     epi, u, c, g = row["EPI"], row["U"], row["C"], row["G"]
@@ -151,11 +165,11 @@ def make_region_comment_gpt(client, region: str, row: pd.Series, slogan: Optiona
 
 - 지역명: {region}
 - 지표: EPI={epi:.2f}, U={u:.3f}, C={c:.3f}, G={g:.3f}
-- 행정 슬로건: {slogan if slogan else "슬로건 정보 없음"}
+- 제안 슬로건: {slogan if slogan else "슬로건 생성 실패"}
 - 규칙 기반 요약: {summary_hint}
 
 요청사항:
-1) 2~3문장 내로 간결하게.
+1) 2~3문장 내로 간결하게. 경어체 사용.
 2) 첫 문장에 현재 포지션(외부 인식/차별화/정합성/괴리)에 대한 총평.
 3) 두 번째 문장에 우선순위 1~2개 수준의 액션 제안(홍보/콘텐츠/메시지 정렬 중 택일).
 
@@ -180,16 +194,10 @@ def make_overall_intro(df: pd.DataFrame) -> str:
 # 리포트 생성 (MD + CSV)
 def generate_markdown_report(
     df: pd.DataFrame,
-    gov: Optional[pd.DataFrame],
     output_md: Path,
     output_csv: Path,
     client
 ) -> None:
-
-    slogan_map = {}
-    if gov is not None and "region" in gov.columns and "slogan" in gov.columns:
-        for _, r in gov.iterrows():
-            slogan_map[str(r["region"]).strip()] = str(r["slogan"]).strip()
 
     bands = compute_quantile_bands(df)
 
@@ -208,14 +216,15 @@ def generate_markdown_report(
     for _, row in df.sort_values("region").iterrows():
         region = row["region"]
         epi, u, c, g = float(row["EPI"]), float(row["U"]), float(row["C"]), float(row["G"])
-        slogan = slogan_map.get(region)
+        slogan = make_region_slogan_gpt(client, region, row)
+        if not slogan:  # GPT 실패 대비 간단한 폴백
+            slogan = f"{tokens_ko(region)[-1] if tokens_ko(region) else region} 행복도시"
 
         summary_hint = build_rule_based_summary(row, bands, slogan)
         comment = make_region_comment_gpt(client, region, row, slogan, summary_hint)
 
         md.append(f"## {region}")
-        if slogan:
-            md.append(f"- **행정 슬로건**: {slogan}")
+        md.append(f"- **제안 슬로건**: {slogan}")
         md.append("")
         md.append("| 지표 | 값 | 해석 |")
         md.append("|---|---:|---|")
@@ -237,7 +246,7 @@ def generate_markdown_report(
             "U_tier": interpret_value("U", u, bands),
             "C_tier": interpret_value("C", c, bands),
             "G_tier": interpret_value("G", g, bands),
-            "slogan": slogan or "",
+            "slogan": slogan,
             "comment": comment
         })
 
@@ -257,14 +266,11 @@ def main(scores_csv: Optional[str] = None, gov_csv: Optional[str] = None):
     if not required.issubset(df.columns):
         raise ValueError(f"지표 CSV에 다음 컬럼이 필요합니다: {required}")
 
-    gov_path = Path(gov_csv) if gov_csv else DEFAULT_GOV_SLOGANS
-    gov_df = safe_read_csv(gov_path)
-
     ts = now_tag()
     out_md  = RESULTS_DIR / f"regional_branding_report_{ts}.md"
     out_csv = RESULTS_DIR / f"regional_branding_insights_{ts}.csv"
 
-    generate_markdown_report(df, gov_df, out_md, out_csv, client)
+    generate_markdown_report(df, out_md, out_csv, client)
 
 if __name__ == "__main__":
     main()
