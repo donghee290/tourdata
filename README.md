@@ -1,6 +1,8 @@
 # 데이터로 증명하는 우리 지역다움
+  
 
 ## 디렉토리 구조
+```
 analyzing/            # 분석 코드/노트
 data_collecting/      # 수집 스크립트/원문 백업
 reporting/
@@ -9,7 +11,8 @@ reporting/
 data/                 # 입력 CSV들
 results/              # 모든 산출물 저장
 main.py               # 전체 파이프라인 실행 진입점
-
+```
+  
 ## Quickstart
 1) 가상환경 + 패키지 설치
 
@@ -26,15 +29,15 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
-
+  
 2) 실행
 ```
 python main.py
 ```
 
-
+  
 ## 파이프라인 설명
-1) 데이터 수집 (data_collecting/)
+1. 데이터 수집 (data_collecting/)
 
 - 한국관광공사/지자체 오픈API 및 CSV 다운로드 기반 수집
 
@@ -47,9 +50,9 @@ python main.py
   - 전국문화축제 표준데이터 (기간 필터/일수 집계 등)
 
   - 블로그 스니펫 크롤링 결과
+  
 
-
-2) 분석 (analyzing/)
+2. 분석 (analyzing/)
 
 - TF-IDF 상위 키워드: 지역별 블로그 스니펫 → 정규식(한글 2자↑), 불용어 제거 → TfidfVectorizer → 상위 키워드/점수
 
@@ -58,9 +61,9 @@ python main.py
 - LDA 토픽 모델링: 지역별 문서 묶음 → CountVectorizer → LDA → 토픽별 상위 단어들(term, beta)
 
 - 고유성 분석: regional_uniqueness_analysis.csv에 uniqueness_composite 등 포함
+  
 
-
-3) 지표 산출 (reporting/indicator_calculator.py)
+3. 지표 산출 (reporting/indicator_calculator.py)
 
 입력: data/의 세 CSV
 출력: results/의 4개 CSV (타임스탬프 없이 고정 저장)
@@ -76,8 +79,9 @@ python main.py
   - G (괴리도)
     - gov_slogans.csv의 현재 행정 슬로건 vs 사용자 주제(블로그+LDA)
     - 단어 수준 Jaccard와 문자 n-gram TF-IDF 코사인 중 최댓값을 유사도로 보고, G = 1 - 유사도 (낮을수록 좋음)
+  
 
-4) 리포트 생성 (reporting/report_generator.py)
+4. 리포트 생성 (reporting/report_generator.py)
 
 입력: results/regional_branding_scores.csv (+선택 gov_slogans.csv)
 출력: 마크다운과 시각화용 CSV (타임스탬프 포함)
@@ -90,6 +94,7 @@ python main.py
     - results/regional_branding_report_YYYYMMDD_HHMMSS.md
     - results/regional_branding_insights_YYYYMMDD_HHMMSS.csv
 
+  
 ## 데이터 스키마 요약
 
 `TF-IDF_top_keywords.csv`
@@ -100,6 +105,7 @@ python main.py
 | keyword      | str   | 키워드(표면형)  |
 | score\_tfidf | float | TF-IDF 점수 |
 
+  
 `region_lda_topics_summary.csv`
 | column | type  | 설명             |
 | ------ | ----- | -------------- |
@@ -109,18 +115,20 @@ python main.py
 | term   | str   | 토픽의 상위 단어      |
 | beta   | float | 단어 가중치(확률/비례값) |
 
+  
 `regional_uniqueness_analysis.csv`
 | column                | type  | 설명                      |
 | --------------------- | ----- | ----------------------- |
 | region                | str   | 지역명                     |
 | uniqueness\_composite | float | 최종 고유성 점수(LOF/희귀도/네트워크) |
 
+  
 `gov_slogans.csv`
 | column | type | 설명            |
 | ------ | ---- | ------------- |
 | region | str  | 지역명           |
 | slogan | str  | **현재** 행정 슬로건 |
-
+  
 
 ## 팀원(Contributors)
 - 오수민: 데이터 분석 및 시각화
