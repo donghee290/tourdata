@@ -4,3 +4,5 @@ python-dotenv
 selenium
 webdriver-manager
 regex
+sklearn
+openai
