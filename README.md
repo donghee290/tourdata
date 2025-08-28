@@ -14,7 +14,7 @@ main.py               # 전체 파이프라인 실행 진입점
 ```
   
 ## Quickstart
-1) 가상환경 + 패키지 설치
+### 1. 가상환경 + 패키지 설치
 
 Windows (PowerShell)
 ```
@@ -30,14 +30,14 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
   
-2) 실행
+### 2. 실행
 ```
 python main.py
 ```
 
   
 ## 파이프라인 설명
-1. 데이터 수집 (data_collecting/)
+### 1. 데이터 수집 (data_collecting/)
 
 - 한국관광공사/지자체 오픈API 및 CSV 다운로드 기반 수집
 
@@ -52,7 +52,7 @@ python main.py
   - 블로그 스니펫 크롤링 결과
   
 
-2. 분석 (analyzing/)
+### 2. 분석 (analyzing/)
 
 - TF-IDF 상위 키워드: 지역별 블로그 스니펫 → 정규식(한글 2자↑), 불용어 제거 → TfidfVectorizer → 상위 키워드/점수
 
@@ -63,10 +63,10 @@ python main.py
 - 고유성 분석: regional_uniqueness_analysis.csv에 uniqueness_composite 등 포함
   
 
-3. 지표 산출 (reporting/indicator_calculator.py)
+### 3. 지표 산출 (reporting/indicator_calculator.py)
 
-입력: data/의 세 CSV
-출력: results/의 4개 CSV (타임스탬프 없이 고정 저장)
+- 입력: data/의 세 CSV
+- 출력: results/의 4개 CSV (타임스탬프 없이 고정 저장)
   - EPI (외부 인식 지수)
     - region별 score_tfidf 평균 → MinMax(0~1) → EPI_raw = 0.8 * blog + 0.2 * 0.5
     - 다시 MinMax(0~100) → EPI
@@ -81,10 +81,10 @@ python main.py
     - 단어 수준 Jaccard와 문자 n-gram TF-IDF 코사인 중 최댓값을 유사도로 보고, G = 1 - 유사도 (낮을수록 좋음)
   
 
-4. 리포트 생성 (reporting/report_generator.py)
+### 4. 리포트 생성 (reporting/report_generator.py)
 
-입력: results/regional_branding_scores.csv (+선택 gov_slogans.csv)
-출력: 마크다운과 시각화용 CSV (타임스탬프 포함)
+- 입력: results/regional_branding_scores.csv (+선택 gov_slogans.csv)
+- 출력: 마크다운과 시각화용 CSV (타임스탬프 포함)
   - 새 슬로건 자동 제안(GPT)
     - 리포트에서는 **각 지역의 새로운 ‘제안 슬로건’**을 GPT로 1개 생성(한국어, 10자 이내)
     - G는 현재 슬로건과의 괴리를 측정하는 지표로서 계속 유지됨
